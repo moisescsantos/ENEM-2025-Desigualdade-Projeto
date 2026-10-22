@@ -1,0 +1,545 @@
+---
+title: "ENEM 2025: desigualdade de notas por rede de ensino, perfil socioeconômico e PIB regional"
+author: "Moises da Conceição dos Santos"
+date: "`r format(Sys.Date(), '%B de %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    css: estilo.css
+lang: pt-BR
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(here)
+library(fixest)
+library(modelsummary)
+
+agr      <- read_rds(here("dados", "tratados", "enem_agregado.rds"))
+base     <- read_rds(here("dados", "tratados", "base_regional.rds"))
+modelos  <- read_rds(here("resultados", "tabelas", "modelos.rds"))
+gap_obj  <- read_rds(here("resultados", "tabelas", "gap_regioes.rds"))
+residuos <- read_csv(here("resultados", "tabelas", "residuos_regioes.csv"),
+                     col_types = cols(cod_rgi = "c"))
+quantis  <- read_rds(here("resultados", "tabelas", "quantis.rds"))
+mae      <- read_rds(here("resultados", "tabelas", "mae_renda.rds"))
+
+num <- function(x, d = 0) format(round(x, d), nsmall = d, decimal.mark = ",", big.mark = ".")
+pct <- function(x, d = 1) paste0(num(100 * x, d), "%")
+fig <- function(arquivo) knitr::include_graphics(here("resultados", "figuras", arquivo))
+
+vg <- agr$visao_geral
+por_rede <- agr$notas_localizacao |>
+  group_by(rede) |>
+  summarise(n = sum(n_total), nota = weighted.mean(nota_geral, n_total))
+nota_rede <- setNames(por_rede$nota, por_rede$rede)
+n_rede    <- setNames(por_rede$n, por_rede$rede)
+
+r2 <- map_dbl(modelos, ~ r2(.x, "r2"))
+b_pib   <- coef(modelos[["(1) Só PIB"]])[["log_pib_pc"]]
+b_renda <- coef(modelos[["(4) + % privada"]])[["log_renda_pc"]]
+b_gap   <- coef(gap_obj$modelo)[["log_pib_pc"]]
+gap     <- gap_obj$dados
+p10_90  <- quantile(base$nota_geral, c(0.1, 0.9))
+```
+
+## Resumo
+
+- **Pergunta:** como as notas do ENEM 2025 variam entre redes de ensino e
+  territórios, e quanto dessa variação é explicada pela riqueza da região
+  (PIB) e pelo perfil socioeconômico dos alunos?
+- **Rede de ensino:** entre os `r num(sum(n_rede))` concluintes de 2025
+  presentes nos dois dias, a nota geral média na rede
+  **privada** (`r num(nota_rede[["Privada"]])`) é
+  **`r num(nota_rede[["Privada"]] - nota_rede[["Estadual"]])` pontos** maior que na
+  **estadual** (`r num(nota_rede[["Estadual"]])`). A rede
+  **federal** (`r num(nota_rede[["Federal"]])`) fica bem mais perto da
+  privada que da estadual.
+- **Território:** o PIB per capita sozinho explica `r pct(r2[[1]], 0)` da
+  variação das notas entre as regiões imediatas. O **perfil socioeconômico
+  dos alunos** explica **`r pct(r2[[2]], 0)`**. Com o perfil no modelo, o PIB
+  acrescenta pouco: o R² passa de `r pct(r2[[2]], 0)` para `r pct(r2[[3]], 0)`.
+- **A vantagem da rede privada encolhe nas regiões mais ricas:** dobrar o
+  PIB per capita está associado a uma diferença privada − estadual
+  `r num(abs(b_gap) * log(2))` pontos menor.
+- **Há regiões que superam o esperado** para o seu perfil, como o Sertão
+  da Paraíba e de Pernambuco, e outras muito abaixo, como o interior do
+  Amazonas. Elas são candidatas naturais a estudos de caso.
+- **Além da média:** a renda média da região explica melhor as notas dos
+  alunos de **nota baixa** (R² de `r pct(quantis$coef$r2[quantis$coef$quantil == 0.1 & quantis$coef$preditor == "log_renda_pc"], 0)`)
+  do que as de **nota alta** (`r pct(quantis$coef$r2[quantis$coef$quantil == 0.9 & quantis$coef$preditor == "log_renda_pc"], 0)`).
+  A inclinação, porém, não é estatisticamente diferente entre os dois grupos.
+- **Escolaridade da mãe:** nas regiões, ela é praticamente inseparável da
+  renda (correlação de `r num(mae$correlacao, 2)`). Com as duas no mesmo
+  modelo, prevalece a renda. Isso não confirma nem refuta a literatura, que
+  trabalha com dados individuais.
+
+## Observação: o que a LGPD limita e o que ela protege
+
+Esta análise foi desenhada em torno de uma restrição imposta pela Lei Geral
+de Proteção de Dados (Lei nº 13.709/2018). Vale explicar a restrição antes
+dos resultados, porque ela define o que este relatório pode e o que não pode
+afirmar.
+
+**O que a LGPD limitou nos microdados do ENEM**
+
+Desde 2020, o INEP adota um modelo simplificado de microdados. Na edição
+de 2025, isso significa que:
+
+- os arquivos de **notas** e de **questionário socioeconômico** são
+  publicados **separados, sem chave em comum**. Não é possível saber a
+  renda, a cor/raça ou a escolaridade dos pais de quem tirou cada nota;
+- o **município de residência** e o de nascimento foram retirados. Resta
+  apenas o município onde a prova foi feita;
+- a **idade exata** foi substituída por faixas etárias;
+- o **código da escola** é mascarado quando ela tem menos de 10
+  participantes;
+- provas aplicadas a **grupos muito pequenos** foram excluídas da base.
+
+Para a pesquisa, o custo é real. Perguntas clássicas, como "quanto a renda
+da família explica a nota do aluno?", não podem mais ser respondidas com os
+dados de 2025. Por isso, este relatório trabalha com **regiões**, e não com
+indivíduos, e por isso usa a **renda média da região**, e não a renda de
+cada família.
+
+**O que a LGPD resguardou**
+
+- **Proteção de quase 5 milhões de pessoas, muitas delas menores de
+  idade.** Em um município pequeno, a combinação de escola, faixa etária,
+  sexo e cor/raça pode apontar para um único estudante. Ligar essa pessoa à
+  sua nota e à renda declarada da família exporia informações que ela
+  forneceu ao Estado com outra finalidade. O próprio INEP relata ter
+  encontrado evidências concretas de que o código da escola facilitava a
+  identificação indevida de participantes.
+- **Proteção de dados sensíveis.** Cor/raça é dado sensível pela LGPD
+  (art. 5º, II), e renda e condições de moradia expõem a situação
+  econômica da família.
+- **Confiança no questionário.** O questionário socioeconômico só tem valor
+  se os participantes responderem com sinceridade, e isso depende de
+  confiarem que as respostas não serão expostas.
+- **Menos rankings enganosos.** O INEP deixou de divulgar o "ENEM por
+  Escola" desde 2015 e não recomenda usar os microdados para ranquear
+  escolas, que costumam medir mais o perfil dos alunos do que a qualidade do
+  ensino. A seção 4 deste relatório mostra justamente o peso desse perfil.
+
+**O equilíbrio possível.** A lei não fechou os dados: ela mudou a forma de
+usá-los. Este relatório mostra que, com agregação territorial, ainda é
+possível produzir evidência relevante para políticas públicas sem expor
+nenhum participante. O preço é a cautela nas conclusões, explicitada ao
+longo do texto e na seção 11.
+
+## 1. Dados e desenho
+
+| Fonte | Conteúdo | Nível |
+|---|---|---|
+| INEP: microdados do ENEM 2025 | Notas, rede e localização da escola (arquivo *Resultados*); perfil e questionário socioeconômico (arquivo *Participantes*) | Participante |
+| IBGE: PIB dos Municípios (SIDRA 5938) | PIB a preços correntes, 2023 | Município |
+| IBGE: Censo 2022 (SIDRA 4709) | População residente | Município |
+| IBGE: API de Localidades | Município → região geográfica imediata | Município |
+| IPEA: pacote `geobr` | Malhas das regiões imediatas e das UFs | Região |
+
+**O desafio: as bases do INEP não se conectam.** Para cumprir a LGPD, o
+INEP divulga os arquivos de participantes e de resultados **sem chave em
+comum**. Não é possível saber a renda de quem tirou cada nota. A solução foi
+usar o **território como ponte**: cada base é agregada por região e só
+depois cruzada.
+
+```
+Resultados (notas, rede)   ─► por região imediata ─┐
+Participantes (perfil)     ─► por região imediata ─┼─► base regional
+IBGE (PIB 2023, pop. 2022) ─► por região imediata ─┘   (507 regiões)
+```
+
+**Por que usar a região imediata, e não o município?** O participante só tem
+o município **onde fez a prova**. O INEP não divulga mais o município de
+residência, e a prova é aplicada em cerca de 1.800 cidades-polo. As 510
+**regiões geográficas imediatas** do IBGE são justamente uma cidade-polo e
+os municípios que dependem dela, o que corresponde bem à geografia dos
+locais de prova.
+
+**População comparável: concluintes de 2025.** Treineiros e egressos
+variam muito de região para região. Por isso, as duas bases foram
+restringidas aos concluintes do ensino médio em 2025:
+
+- **Notas:** participantes com escola informada, vinculados pelo INEP ao
+  Censo Escolar 2025 (`r num(vg$com_escola)`), localizados pelo município da
+  **escola**. A análise usa os presentes nos dois dias.
+- **Perfil:** participantes que declararam concluir o ensino médio em 2025
+  (1.811.344), localizados pelo município da **prova**.
+
+As duas contagens são muito próximas: os vinculados ao Censo equivalem a 96%
+dos que se declararam concluintes. A ponte territorial liga, portanto,
+praticamente a mesma população.
+
+**Nota geral:** média simples das quatro provas objetivas e da redação.
+
+## 2. Panorama nacional
+
+Dos `r num(vg$inscritos)` inscritos, **`r pct(vg$abstencao)`** faltaram ou
+foram eliminados em pelo menos um dos dias. Entre os presentes no 1º dia,
+**`r pct(vg$redacao_zero)`** tiveram nota zero na redação.
+
+```{r status-redacao}
+rotulos <- c("1" = "Sem problemas", "2" = "Anulada", "3" = "Cópia do texto motivador",
+             "4" = "Em branco", "6" = "Fuga ao tema", "7" = "Não atendimento ao tipo textual",
+             "8" = "Texto insuficiente", "9" = "Parte desconectada")
+agr$status_redacao |>
+  mutate(Situação = rotulos[as.character(status)], pct = n / sum(n)) |>
+  filter(status != 1) |>
+  arrange(desc(n)) |>
+  transmute(Situação, Participantes = num(n), `% dos presentes` = pct(pct, 2)) |>
+  knitr::kable(align = "lrr", caption = "Redações que receberam nota zero, por motivo")
+```
+
+A redação **em branco** é, de longe, o principal motivo. Esse é um sinal
+mais de desistência do que de desempenho.
+
+```{r fig-dist, out.width = "85%"}
+fig("distribuicao_por_rede.png")
+```
+
+A distribuição da rede estadual tem um **segundo pico perto de 330
+pontos**. Ele corresponde aos alunos com **redação zerada**: como a redação
+vale um quinto da nota geral, zerá-la derruba a média em cerca de 120
+pontos. Esse grupo é muito menor nas redes federal e privada.
+
+```{r tab-rede}
+agr$notas_localizacao |>
+  filter(rede != "Municipal") |>
+  transmute(Rede = rede, Localização = localizacao,
+            Concluintes = num(n_total), `Nota geral` = num(nota_geral, 1)) |>
+  knitr::kable(align = "llrr", caption = "Nota geral média por rede e localização da escola")
+```
+
+A desigualdade também é **urbano-rural**: dentro de cada rede, as escolas
+rurais ficam de 25 (federal) a 83 pontos (privada) abaixo das urbanas.
+
+## 3. Desigualdade entre redes, UF por UF
+
+```{r fig-uf, out.width = "80%"}
+fig("estadual_privada_uf.png")
+```
+
+- A diferença entre privada e estadual vai de cerca de 88 pontos (SP e PR)
+  a 147 pontos (PI).
+- **Em todas as UFs**, a diferença passa de 85 pontos. Mesmo onde a rede
+  estadual é mais forte (RS, SC, SP e PR), ela continua muito abaixo da
+  privada.
+- As **maiores diferenças** estão no Nordeste e no Norte: PI (147), AM
+  (132), AL (131) e CE (130).
+
+## 4. O que explica as diferenças entre regiões?
+
+```{r fig-disp}
+fig("nota_pib_renda.png")
+```
+
+A nota média de cada região tem uma relação **muito mais forte com a renda
+das famílias dos alunos** do que com o **PIB per capita** da região. O PIB
+mede o que a região **produz**, e não quanto as famílias recebem. Em
+regiões com grande produção de minério, petróleo ou agronegócio, por
+exemplo, o PIB per capita fica alto enquanto a renda local continua baixa.
+
+```{r tab-modelos}
+nomes <- c("log_pib_pc" = "log(PIB per capita)",
+           "log_renda_pc" = "log(renda per capita dos alunos)",
+           "mae_superior" = "% mães com ensino superior",
+           "sem_computador" = "% sem computador em casa",
+           "ppi" = "% pretos, pardos e indígenas",
+           "pct_privada" = "% concluintes na rede privada")
+modelsummary(setNames(modelos, paste("Modelo", 1:5)), coef_map = nomes, stars = TRUE,
+             gof_map = c("nobs", "r.squared"), output = "markdown",
+             notes = paste("Variável dependente: nota geral média da região imediata.",
+                           "Regressões ponderadas pelo nº de concluintes; erros-padrão agrupados por UF."))
+```
+
+**Como ler a tabela**
+
+- **Modelo 1:** sozinho, um PIB per capita **10% maior** está associado a uma nota
+  **`r num(b_pib * log(1.1), 1)` pontos** maior. Dobrar o PIB equivale a
+  `r num(b_pib * log(2))` pontos.
+- **Modelo 2:** as quatro variáveis de perfil explicam `r pct(r2[[2]], 0)` da
+  variação entre regiões, muito mais que o PIB.
+- **Modelos 3 e 4:** com o perfil no modelo (o 4 inclui também a % de
+  concluintes na rede privada), o coeficiente do PIB **fica
+  negativo**. Entre regiões com o mesmo perfil de alunos, ter PIB maior não
+  está associado a notas maiores. Isso reforça que o que importa é a
+  riqueza das famílias, e não a produção da região. No modelo 4, uma
+  renda per capita dos alunos **10% maior** equivale a cerca de
+  **`r num(b_renda * log(1.1), 1)` pontos**.
+- **Modelo 5:** com efeitos fixos de UF, a comparação é feita entre regiões da
+  mesma UF, o que absorve diferenças de política estadual. As variáveis de
+  perfil continuam relevantes.
+
+**Cuidado:** as variáveis de perfil são muito correlacionadas entre si.
+Sinais isolados, como o coeficiente negativo de "% mães com ensino
+superior", refletem essa colinearidade e não devem ser lidos um a um. A
+conclusão robusta é sobre o **conjunto** do perfil.
+
+## 5. A vantagem da escola privada depende da riqueza da região?
+
+```{r fig-gap, out.width = "85%"}
+fig("gap_privada_estadual_pib.png")
+```
+
+Nas `r nrow(gap)` regiões com pelo menos 30 concluintes em cada rede, a
+diferença privada − estadual tem mediana de **`r num(median(gap$gap))`
+pontos**. Ela **diminui** com o PIB per capita: dobrar o PIB está associado
+a uma diferença `r num(abs(b_gap) * log(2), 1)` pontos menor. Nas regiões
+mais pobres, a escola pública fica mais distante da privada.
+
+## 6. Mapa da desigualdade e regiões fora do padrão
+
+```{r fig-mapas}
+fig("mapas_regioes.png")
+```
+
+As notas seguem um claro **gradiente norte-sul**, quase idêntico ao da
+renda dos alunos. O mapa do canto inferior direito mostra o que **sobra**
+depois de descontar o PIB, o perfil dos alunos e a participação da rede
+privada (modelo 4):
+
+- **Azul:** regiões com notas **acima do esperado**, que se concentram no
+  Sertão nordestino e no interior de São Paulo e de Minas Gerais.
+- **Vermelho:** regiões **abaixo do esperado**, com destaque para o
+  interior do Amazonas.
+
+```{r tab-residuos}
+tab_res <- function(d) d |>
+  transmute(`Região imediata` = regiao_imediata,
+            Concluintes = num(n_concluintes),
+            `Renda pc (R$)` = num(renda_pc),
+            `Nota observada` = num(nota_geral, 1),
+            `Nota esperada` = num(esperada, 1),
+            Diferença = num(residuo, 1))
+residuos |> slice_max(residuo, n = 10) |> tab_res() |>
+  knitr::kable(align = "lrrrrr", caption = "10 regiões mais acima do esperado")
+residuos |> slice_min(residuo, n = 10) |> tab_res() |>
+  knitr::kable(align = "lrrrrr", caption = "10 regiões mais abaixo do esperado")
+```
+
+As regiões mais acima do esperado são **do interior do Nordeste** (PB, PE,
+RN e SE): têm renda per capita baixa e, mesmo assim, notas na média
+nacional. Esses são bons pontos de partida para investigar **políticas
+educacionais estaduais e municipais**, como a expansão do ensino integral.
+Esse resultado não prova que alguma política funcionou. Ele mostra onde
+vale a pena procurar.
+
+## 7. Além da média: alunos de nota baixa e de nota alta
+
+Até aqui, comparamos a **nota média** das regiões. Mas uma região pode ter
+média alta e, ainda assim, muitos alunos com nota muito baixa. Para olhar a
+distribuição inteira, calculamos em cada região os **quantis** da nota dos
+concluintes:
+
+- **p10:** nota abaixo da qual estão os 10% de **nota mais baixa** da região;
+- **p50:** a mediana;
+- **p90:** nota acima da qual estão os 10% de **nota mais alta**.
+
+Em seguida, estimamos, para cada quantil, a associação com o **PIB per
+capita** e com a **renda média da região**.
+
+**Importante:** "renda média da região" é a média da renda per capita
+declarada pelos concluintes da região. **Não é a renda da família de cada
+aluno**, porque em 2025 a LGPD impede ligar a nota ao questionário de cada
+participante (veja a Observação).
+
+```{r fig-quantis, out.width = "85%"}
+fig("quantis_renda_pib.png")
+```
+
+```{r tab-quantis}
+quantis$coef |>
+  mutate(preditor = recode(preditor, log_renda_pc = "Renda média da região",
+                           log_pib_pc = "PIB per capita")) |>
+  transmute(Preditor = preditor, Quantil = paste0("p", quantil * 100),
+            Coeficiente = num(coef, 1), `Erro-padrão` = num(ep, 1), `R²` = num(r2, 2)) |>
+  arrange(Preditor) |>
+  knitr::kable(align = "llrrr",
+               caption = "Associação da nota com o contexto regional, por quantil")
+```
+
+```{r tab-teste}
+quantis$teste |>
+  mutate(preditor = recode(preditor, log_renda_pc = "Renda média da região",
+                           log_pib_pc = "PIB per capita")) |>
+  transmute(Preditor = preditor, `Diferença p90 − p10` = num(dif_p90_p10, 1),
+            `Erro-padrão` = num(ep, 1), `p-valor` = num(p_valor, 2)) |>
+  knitr::kable(align = "lrrr",
+               caption = "Teste formal: a associação é diferente para nota baixa e nota alta?")
+```
+
+**Como ler:**
+
+- **A inclinação é parecida em toda a distribuição.** Os coeficientes do p10
+  são um pouco maiores, mas a diferença em relação ao p90 **não é
+  estatisticamente significativa** (p-valores de
+  `r num(quantis$teste$p_valor[1], 2)` e `r num(quantis$teste$p_valor[2], 2)`).
+  Os dados **não permitem afirmar** que o contexto regional pesa mais para
+  quem tem nota baixa.
+- **O que muda é o poder explicativo.** O R² cai do p10 para o p90. As
+  notas mais baixas de cada região são bem previstas pelo contexto regional,
+  enquanto as mais altas dependem mais de fatores que a região não captura,
+  como a escola e a trajetória individual de cada aluno.
+- **As regiões sobem ou descem em bloco.** A distância entre p90 e p10 fica
+  em torno de `r num(quantis$amplitude[["Median"]])` pontos na maioria das
+  regiões e quase não varia com a renda. Regiões mais ricas deslocam a
+  distribuição inteira para cima, sem torná-la mais ou menos desigual por
+  dentro.
+
+**Nota de método:** como PIB e renda são medidos por região, este é o
+equivalente regional de uma regressão quantílica. Uma regressão quantílica
+com a renda de **cada família** exigiria dados individuais ligados, que a
+edição de 2023 do ENEM ainda oferecia (seção 9).
+
+## 8. Escolaridade da mãe: o que dá e o que não dá para afirmar
+
+Estudos com dados individuais costumam apontar a **escolaridade da mãe**
+como um dos preditores mais fortes do desempenho escolar, às vezes mais
+forte que a renda. Testamos o que é possível testar com os dados de 2025.
+
+```{r tab-mae}
+tibble(
+  Modelo = c("Só renda média da região", "Só % de mães com ensino superior",
+             "As duas juntas"),
+  `R²` = num(c(mae$r2_renda, mae$r2_mae, mae$r2_ambos), 2)
+) |>
+  knitr::kable(align = "lr", caption = "Quanto cada variável explica da nota média das regiões")
+
+modelsummary(mae$modelos,
+             coef_map = c(log_renda_pc = "Renda média da região (padronizada)",
+                          mae_superior = "% de mães com ensino superior (padronizada)"),
+             stars = TRUE, gof_map = c("nobs", "r.squared"), output = "markdown",
+             notes = "Variáveis padronizadas: coeficientes em desvios-padrão. EP agrupados por UF.")
+```
+
+**O que os dados mostram:**
+
+- Nas regiões, renda e escolaridade da mãe andam praticamente juntas
+  (correlação de `r num(mae$correlacao, 2)`).
+- Sozinha, a renda explica mais (`r pct(mae$r2_renda, 0)`) do que a
+  escolaridade da mãe (`r pct(mae$r2_mae, 0)`).
+- Com as duas juntas, a renda mantém o efeito e a da mãe some ou fica
+  negativa. Com correlação tão alta, porém, esse sinal isolado é instável e
+  não deve ser interpretado.
+
+**Por que isso não contradiz a literatura:**
+
+1. **Nível de análise.** A literatura compara alunos, e nós comparamos
+   regiões. Uma relação forte entre alunos pode desaparecer no agregado.
+2. **Medida grosseira.** A "% de mães com ensino superior" só capta o topo
+   da escolaridade. No Brasil, boa parte da diferença está entre mães que
+   completaram ou não o ensino fundamental e o médio.
+3. **Colinearidade.** Com duas variáveis quase idênticas entre regiões, os
+   dados não conseguem separar o peso de cada uma.
+
+**Conclusão desta seção:** com os dados de 2025, **não é possível afirmar**
+que a escolaridade da mãe pesa mais que a renda. Afirmá-lo seria uma
+inferência sem base nestes dados. O teste adequado exige dados individuais
+(seção 9).
+
+## 9. Próximo passo: escolaridade da mãe × infraestrutura urbana
+
+Uma pergunta natural depois da seção 8 é se a **escolaridade da mãe** pesa
+mais nas notas do que as **condições urbanas** onde o aluno vive:
+mobilidade (tempo de deslocamento), condições ambientais (arborização e
+drenagem), condições habitacionais, serviços coletivos (água, esgoto e lixo)
+e infraestrutura (acessibilidade das vias). Essas são as cinco dimensões do
+Índice de Bem-Estar Urbano (IBEU), do Observatório das Metrópoles.
+
+Essa análise **não foi feita neste relatório**. Esta seção registra como
+ela pode ser feita e como os resultados devem ser lidos.
+
+**Os dados já estão disponíveis:**
+
+- **ENEM 2023:** até essa edição, nota e questionário vinham no mesmo
+  arquivo. Isso permite ligar a nota de cada aluno à escolaridade da mãe
+  (Q002), à renda da família (Q006) e ao município da escola. Os
+  microdados já foram baixados e conferidos.
+- **Censo 2022 do IBGE:** a publicação *Características Urbanísticas do
+  Entorno dos Domicílios* (abril de 2025) traz, por município, arborização,
+  bueiro/drenagem, pavimentação, calçada, rampa, iluminação e ponto de
+  ônibus. Os resultados do Censo 2022 também incluem abastecimento de água,
+  esgoto e coleta de lixo. O IBEU municipal pronto só existe com o Censo
+  2010, por isso os índices precisariam ser recalculados com o Censo 2022.
+
+**Como medir qual pesa mais:**
+
+1. **Modelo multinível:** alunos agrupados por município. A escolaridade da
+   mãe é medida no aluno, e a infraestrutura no município. O modelo separa
+   quanto da variação das notas acontece dentro e entre municípios.
+2. **Análise de dominância (decomposição de Shapley do R²):** divide o
+   poder explicativo entre variáveis correlacionadas de forma justa,
+   resolvendo o problema de colinearidade visto na seção 8.
+3. **Validação fora da amostra:** mede quanto cada variável melhora a
+   previsão em alunos que não foram usados para estimar o modelo.
+
+**Como ler o resultado: o que dará e o que não dará para afirmar**
+
+Se a análise mostrar que a escolaridade da mãe responde por uma parte maior
+do poder explicativo, **o que dará para afirmar** é que a escolaridade da
+mãe **explica mais** da variação das notas do que os índices de
+infraestrutura urbana.
+
+**O que não dará para afirmar** é que melhorar a escolaridade das mães
+teria mais **impacto** nas notas do que melhorar o saneamento ou as vias.
+Fazer essa inferência diretamente a partir desses dados seria possível,
+mas incorreto. Nenhuma dessas variáveis foi sorteada, e "explicar mais
+variação" mede associação, não efeito causal. Para falar em impacto, seria
+preciso um desenho de avaliação de impacto, como os vistos no projeto
+experimental (RCT) deste portfólio.
+
+## 10. Conclusões
+
+1. **A desigualdade entre redes é grande e se repete em todo o país.** Os
+   concluintes da rede estadual ficam em média cerca de 110 pontos atrás dos
+   da rede privada. A rede federal mostra que uma escola pública pode
+   chegar perto da privada.
+2. **A renda das famílias explica mais que o PIB.** Políticas que usam o
+   PIB per capita para focalizar recursos educacionais podem errar o alvo
+   em regiões ricas em produção e pobres em renda.
+3. **A escola pública é mais decisiva nas regiões pobres.** É nelas que a
+   diferença em relação à rede privada é maior.
+4. **Há espaço para aprender com regiões que superam o esperado**,
+   sobretudo no interior do Nordeste.
+5. **O contexto regional desloca a distribuição inteira.** Regiões mais
+   ricas têm alunos de nota baixa e de nota alta com notas maiores, numa
+   inclinação parecida.
+6. **Próximo passo: dados individuais.** Até a edição de 2023, nota e
+   questionário vinham no mesmo arquivo. Com eles, dá para testar a
+   regressão quantílica com a renda de cada família e o peso da
+   escolaridade da mãe aluno a aluno, inclusive em comparação com a
+   infraestrutura urbana do Censo 2022 (seção 9).
+7. **Explicar não é causar.** Mesmo que a escolaridade da mãe venha a
+   explicar mais da variação das notas do que a infraestrutura urbana,
+   isso não autoriza dizer que investir nela teria mais impacto. Essa
+   distinção vale para todas as associações deste relatório.
+
+## 11. Limitações
+
+- **Análise ecológica:** as relações valem **entre regiões**. Não se pode
+  concluir, a partir delas, que um aluno de família mais rica tira uma nota
+  maior. As bases do INEP não permitem esse cruzamento individual.
+- **Associação, não causalidade:** nenhuma variável foi sorteada, e os
+  coeficientes descrevem correlações condicionais.
+- **Geografias diferentes:** as notas estão no município da escola e o
+  perfil no município da prova. As duas são levadas à região imediata, mas
+  o encaixe não é perfeito. 3 regiões não têm local de prova e ficam fora
+  dos modelos.
+- **Renda autodeclarada e em faixas:** a renda per capita foi estimada pelo
+  ponto médio de cada faixa e dividida pelo número de moradores.
+- **Defasagem:** o PIB é de 2023 e a população é do Censo 2022. As notas
+  são de 2025.
+- **Seleção:** só concluintes que fizeram o ENEM entram na análise. Em
+  regiões com menor taxa de inscrição, a amostra pode ser mais
+  selecionada.
+
+## Reprodutibilidade
+
+Código completo em `R/`. Os microdados do INEP não estão no repositório
+(2,6 GB). Baixe-os em
+[gov.br/inep](https://www.gov.br/inep/pt-br/acesso-a-informacao/dados-abertos/microdados/enem)
+e rode `executar_tudo.R`.

@@ -1,0 +1,8 @@
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+dados/tratados/
+resultados/tabelas/*.rds
+relatorio/*_files/
+relatorio/*.html

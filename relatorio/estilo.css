@@ -1,0 +1,33 @@
+/* Texto justificado (linhas com a mesma largura) */
+.main-container p,
+.main-container li {
+  text-align: justify;
+  hyphens: auto;
+}
+
+/* O sumário lateral fica alinhado à esquerda */
+#TOC, #TOC li, .tocify, .tocify li {
+  text-align: left;
+}
+
+/* Tabelas: linha cinza bem clara entre as linhas, para guiar a leitura */
+.main-container table {
+  border-collapse: collapse;
+  margin: 1em 0 1.5em;
+}
+.main-container table th,
+.main-container table td {
+  border-top: none !important;
+  border-bottom: 1px solid #dcdcdc !important;
+  padding: 6px 10px !important;
+}
+.main-container table thead th {
+  border-bottom: 2px solid #bdbdbd !important;
+}
+
+/* Diagramas em bloco de código ficam sem linhas e alinhados à esquerda */
+.main-container pre,
+.main-container pre code {
+  text-align: left;
+  border: none;
+}
